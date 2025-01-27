@@ -3,23 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "uvicorn src.main:app --reload --port 3002",
-    "start": "uvicorn src.main:app --port 3002",
-    "train": "python src/train.py"
-  },
-  "dependencies": {
-    "fastapi": "^0.104.0",
-    "numpy": "^1.24.0",
-    "pandas": "^2.0.0",
-    "pymilvus": "^2.3.0",
-    "pytorch": "^2.0.0",
-    "scikit-learn": "^1.3.0",
-    "transformers": "^4.35.0"
-  },
-  "devDependencies": {
-    "pytest": "^7.0.0",
-    "black": "^23.0.0",
-    "isort": "^5.0.0",
-    "mypy": "^1.0.0"
+    "dev": "python -m src.main",
+    "start": "python -m src.main",
+    "train": "python -m src.train"
   }
 } 

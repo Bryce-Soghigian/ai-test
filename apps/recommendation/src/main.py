@@ -6,12 +6,17 @@ import numpy as np
 from pymilvus import connections, Collection
 import torch
 from transformers import AutoTokenizer, AutoModel
+import time
+from datetime import datetime
 
 from .models import VideoEmbeddingModel, UserEmbeddingModel
 from .config import Settings
+from .init_collections import init_collections
+from .monitor import RecommendationMonitor
 
 app = FastAPI(title="TikTok Clone Recommendation Service")
 settings = Settings()
+monitor = RecommendationMonitor()
 
 # CORS middleware
 app.add_middleware(
@@ -22,24 +27,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Connect to Milvus
-connections.connect(
-    alias="default",
-    host=settings.milvus_host,
-    port=settings.milvus_port,
-)
+# Initialize on startup
+@app.on_event("startup")
+async def startup_event():
+    # Initialize Milvus collections
+    init_collections()
 
-# Load models
-tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-text_encoder = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-video_model = VideoEmbeddingModel()
-user_model = UserEmbeddingModel()
+    # Connect to Milvus
+    connections.connect(
+        alias="default",
+        host=settings.milvus_host,
+        port=settings.milvus_port,
+    )
 
-# Load model weights
-video_model.load_state_dict(torch.load("models/video_model.pt"))
-user_model.load_state_dict(torch.load("models/user_model.pt"))
-video_model.eval()
-user_model.eval()
+    # Load models
+    global tokenizer, text_encoder, video_model, user_model
+    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    text_encoder = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    video_model = VideoEmbeddingModel()
+    user_model = UserEmbeddingModel()
+
+    # Load model weights
+    video_model.load_state_dict(torch.load("models/video_model.pt"))
+    user_model.load_state_dict(torch.load("models/user_model.pt"))
+    video_model.eval()
+    user_model.eval()
 
 class VideoFeatures(BaseModel):
     caption: str
@@ -75,6 +87,8 @@ class RecommendationResponse(BaseModel):
 @app.post("/embeddings/video")
 async def create_video_embedding(video_id: str, features: VideoFeatures):
     try:
+        start_time = time.time()
+
         # Encode text features
         text = f"{features.caption} {' '.join(features.hashtags)}"
         inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
@@ -99,15 +113,32 @@ async def create_video_embedding(video_id: str, features: VideoFeatures):
         collection.insert([
             [video_id],  # Primary key
             embedding.numpy().tolist(),  # Vector field
+            [int(time.time() * 1000)],  # Created at
         ])
+
+        # Log metrics
+        inference_time = time.time() - start_time
+        monitor.log_model_performance(
+            embedding_type="video",
+            inference_time=inference_time,
+            embedding_norm=float(torch.norm(embedding).item()),
+            timestamp=datetime.now(),
+        )
 
         return {"status": "success"}
     except Exception as e:
+        monitor.log_system_health(
+            response_time=time.time() - start_time,
+            error_count=1,
+            timestamp=datetime.now(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/embeddings/user")
 async def create_user_embedding(user_id: str, features: UserFeatures):
     try:
+        start_time = time.time()
+
         # Get video embeddings for watched and liked videos
         collection = Collection("video_embeddings")
         watched_embeddings = collection.query(
@@ -145,15 +176,32 @@ async def create_user_embedding(user_id: str, features: UserFeatures):
         collection.insert([
             [user_id],  # Primary key
             embedding.numpy().tolist(),  # Vector field
+            [int(time.time() * 1000)],  # Updated at
         ])
+
+        # Log metrics
+        inference_time = time.time() - start_time
+        monitor.log_model_performance(
+            embedding_type="user",
+            inference_time=inference_time,
+            embedding_norm=float(torch.norm(embedding).item()),
+            timestamp=datetime.now(),
+        )
 
         return {"status": "success"}
     except Exception as e:
+        monitor.log_system_health(
+            response_time=time.time() - start_time,
+            error_count=1,
+            timestamp=datetime.now(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/recommendations", response_model=RecommendationResponse)
 async def get_recommendations(request: RecommendationRequest):
     try:
+        start_time = time.time()
+
         # Get user embedding
         user_collection = Collection("user_embeddings")
         user_results = user_collection.query(
@@ -193,11 +241,62 @@ async def get_recommendations(request: RecommendationRequest):
         has_more = len(results[0]) > request.limit
         next_cursor = results[0][request.limit - 1].id if has_more else None
 
+        # Log metrics
+        response_time = time.time() - start_time
+        monitor.log_system_health(
+            response_time=response_time,
+            error_count=0,
+            timestamp=datetime.now(),
+        )
+
         return RecommendationResponse(
             items=items,
             has_more=has_more,
             next_cursor=next_cursor,
         )
+    except Exception as e:
+        monitor.log_system_health(
+            response_time=time.time() - start_time,
+            error_count=1,
+            timestamp=datetime.now(),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/recommendations/{video_id}/engage")
+async def record_engagement(
+    video_id: str,
+    watch_time: float,
+    completion_rate: float,
+    liked: bool,
+    user_id: str,
+):
+    """Record user engagement with a recommended video."""
+    try:
+        monitor.log_engagement(
+            user_id=user_id,
+            video_id=video_id,
+            watch_time=watch_time,
+            completion_rate=completion_rate,
+            liked=liked,
+            timestamp=datetime.now(),
+        )
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get current recommendation system metrics."""
+    try:
+        metrics = monitor.get_metrics_summary()
+        embedding_stats = monitor.analyze_embedding_distribution()
+        return {
+            "status": "success",
+            "data": {
+                "metrics": metrics,
+                "embedding_stats": embedding_stats,
+            },
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
