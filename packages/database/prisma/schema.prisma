@@ -1,0 +1,156 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  username      String    @unique
+  name          String?
+  bio           String?
+  avatar        String?
+  hashedPassword String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  videos        Video[]
+  comments      Comment[]
+  likes         Like[]
+  followers     Follow[]    @relation("following")
+  following     Follow[]    @relation("followers")
+  engagements   VideoEngagement[]
+
+  @@map("users")
+}
+
+model Video {
+  id            String    @id @default(cuid())
+  caption       String
+  videoUrl      String
+  thumbnailUrl  String
+  soundId       String?
+  duration      Float
+  width         Int
+  height        Int
+  likes         Int       @default(0)
+  shares        Int       @default(0)
+  comments      Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sound         Sound?    @relation(fields: [soundId], references: [id])
+  commentsList  Comment[]
+  likesList     Like[]
+  hashtags      HashtagsOnVideos[]
+  engagements   VideoEngagement[]
+
+  @@map("videos")
+}
+
+model Comment {
+  id        String    @id @default(cuid())
+  text      String
+  likes     Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relations
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId   String
+  video     Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@map("comments")
+}
+
+model Like {
+  // Relations
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId   String
+  video     Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
+  @@id([userId, videoId])
+  @@map("likes")
+}
+
+model Follow {
+  // Relations
+  followerId    String
+  follower      User      @relation("following", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId   String
+  following     User      @relation("followers", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+
+  @@id([followerId, followingId])
+  @@map("follows")
+}
+
+model Sound {
+  id          String    @id @default(cuid())
+  name        String
+  artistName  String?
+  duration    Float
+  audioUrl    String
+  usageCount  Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  videos      Video[]
+
+  @@map("sounds")
+}
+
+model Hashtag {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  videoCount  Int       @default(0)
+  viewCount   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  videos      HashtagsOnVideos[]
+
+  @@map("hashtags")
+}
+
+model HashtagsOnVideos {
+  videoId     String
+  video       Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  hashtagId   String
+  hashtag     Hashtag   @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@id([videoId, hashtagId])
+  @@map("hashtags_on_videos")
+}
+
+model VideoEngagement {
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId       String
+  video         Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  watchTimeMs   Int
+  completionRate Float
+  liked         Boolean   @default(false)
+  shared        Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  @@id([userId, videoId])
+  @@map("video_engagements")
+} 
